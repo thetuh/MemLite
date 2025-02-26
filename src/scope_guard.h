@@ -7,11 +7,11 @@ class scope_guard
 {
 public:
 	scope_guard( const fn_callback& callback, const fn_args& ...args ) : callback{ callback }, args{ args... }, active( true ) { }
-	~scope_guard( ) { execute( ); }
+	~scope_guard() { execute(); }
 
 public:
-	void execute( ) { if ( active ) { invoke_callable( std::make_index_sequence < std::tuple_size_v<std::tuple<fn_args...>>>( ) ); active = false; } }
-	void cancel( ) { active = false; }
+	void execute() { if ( active ) { invoke_callable( std::make_index_sequence < std::tuple_size_v<std::tuple<fn_args...>>>() ); active = false; } }
+	void cancel() { active = false; }
 
 private:
 	template <size_t... Is>

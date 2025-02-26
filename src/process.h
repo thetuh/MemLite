@@ -15,32 +15,29 @@ template <typename memory_interface>
 class process
 {
 private:
-    DWORD m_pid;
+	DWORD m_pid;
 	memory_interface m_interface;
-    bool m_valid = false;
+	bool m_valid = false;
 
 public:
-    explicit process( DWORD pid ) : m_pid( pid ) { if ( m_interface.attach( pid ) ) m_valid = true; }
-    ~process() { m_interface.detach(); }
+	explicit process( DWORD pid ) : m_pid( pid ) { if ( m_interface.attach( pid ) ) m_valid = true; }
+	~process() { m_interface.detach(); }
 
-    inline bool valid() { return m_valid; }
-    inline memory_interface& get_memory_interface() { return m_interface; }
+	inline bool valid() { return m_valid; }
+	inline memory_interface& get_memory_interface() { return m_interface; }
 
-    bool read( void* address, void* buffer, size_t size ) { return m_interface.read( address, buffer, size ); }
-    bool write( void* address, void* buffer, size_t size ) { return m_interface.write( address, buffer, size ); }
-    void* alloc( void* address, size_t size, DWORD allocation_type, DWORD protect ) { return m_interface.alloc( address, size, allocation_type, protect ); }
-    module_t* get_module( const std::wstring& name ) { return m_interface.get_module( name ); }
-
-	bool dump_module_to_disk( const std::wstring& name );
-	void* find_pattern( const module_t* mod, const char* pattern );
-	
-	// unfinished
-	void* get_proc_address( const module_t* mod, const char* func );
-
-	// todo
+	bool read( void* address, void* buffer, size_t size ) { return m_interface.read( address, buffer, size ); }
+	bool write( void* address, void* buffer, size_t size ) { return m_interface.write( address, buffer, size ); }
+	void* alloc( void* address, size_t size, DWORD allocation_type, DWORD protect ) { return m_interface.alloc( address, size, allocation_type, protect ); }
+	module_t* get_module( const std::wstring& name ) { return m_interface.get_module( name ); }
 
 	bool load_image( const char* filepath );
-    bool map_image( const char* filepath );
+	void* find_pattern( const module_t* mod, const char* pattern );
+	void* get_proc_address( const module_t* mod, const char* func );
+	bool dump_module_to_disk( const std::wstring& name );
+
+	// unfinished
+	bool map_image( const char* filepath );
 };
 
 template<typename memory_interface>
@@ -53,19 +50,19 @@ inline void* process<memory_interface>::find_pattern( const module_t* mod, const
 
 	std::vector<std::byte> module_buffer( mod->size );
 
-    constexpr size_t MAX_ATTEMPTS = 50;
+	constexpr size_t MAX_ATTEMPTS = 50;
 
-    size_t attempts = 0;
-    size_t NUM_READS = 1;
+	size_t attempts = 0;
+	size_t NUM_READS = 1;
 
-    while ( attempts < MAX_ATTEMPTS && !read( mod->base, module_buffer.data(), mod->size / NUM_READS ) )
-    {
-        NUM_READS *= 2;
-        attempts++;
-    }
+	while ( attempts < MAX_ATTEMPTS && !read( mod->base, module_buffer.data(), mod->size / NUM_READS ) )
+	{
+		NUM_READS *= 2;
+		attempts++;
+	}
 
-    if ( attempts == MAX_ATTEMPTS )
-        return error( "[!] reached max attempts to read module\n" );
+	if ( attempts == MAX_ATTEMPTS )
+		return error( "[!] reached max attempts to read module\n" );
 
 	for ( size_t i = 1; i < NUM_READS; i++ )
 	{
@@ -89,8 +86,7 @@ inline void* process<memory_interface>::get_proc_address( const module_t* mod, c
 	if ( !mod )
 		return error( "[!] invalid module passed" );
 
-	// this works assuming the process hasn't altered the module and triggered COW.
-	// https://en.wikipedia.org/wiki/Copy-on-write
+	// this will fail if the module base is different for our process.
 
 	return GetProcAddress( ( HMODULE ) mod->base, function_name );
 }
@@ -98,9 +94,33 @@ inline void* process<memory_interface>::get_proc_address( const module_t* mod, c
 template<typename memory_interface>
 bool process<memory_interface>::load_image( const char* filepath )
 {
-	// todo
+	auto error = []( const char* msg ) -> bool { printf( msg ); return false; };
 
-	// loadlibrary, setwindowshookex...
+	if ( !valid() )
+		return error( "[!] invalid process\n" );
+
+	const auto tid = util::get_window_tid( ( HANDLE ) m_pid );
+	if ( !tid )
+		return error( "[!] failed to get window tid\n" );
+
+	printf( "[-] loading image\n" );
+
+	if ( !std::filesystem::exists( filepath ) )
+		return error( "\tfile not found\n" );
+
+	const auto dll = LoadLibraryExA( filepath, NULL, DONT_RESOLVE_DLL_REFERENCES );
+	if ( !dll )
+		return error( "\tfailed to locally load image\n" );
+
+	static auto dummy_function = ( HOOKPROC ) GetProcAddress( GetModuleHandle( L"kernel32.dll" ), "GetTickCount64" );
+
+	const auto hook_handle = SetWindowsHookEx( WH_GETMESSAGE, dummy_function, dll, tid );
+	if ( !hook_handle )
+		return error( "\tSetWindowsHookEx failed\n" );
+
+	PostThreadMessage( tid, WM_NULL, NULL, NULL );
+
+	return true;
 }
 
 template<typename memory_interface>
@@ -121,7 +141,7 @@ bool process<memory_interface>::map_image( const char* filepath )
 
 	if ( !std::filesystem::exists( filepath ) )
 		return error( "\tfile not found\n" );
-	
+
 	std::basic_ifstream<std::byte> filestream( filepath, std::ios::binary );
 	if ( !filestream )
 		return error( "\tfailed to open file stream\n" );
@@ -208,20 +228,20 @@ bool process<memory_interface>::map_image( const char* filepath )
 			auto* lookup_table_entry = ( IMAGE_THUNK_DATA* ) ( virtual_image.data() + descriptor_table_entry->OriginalFirstThunk );
 			auto* address_table_entry = ( IMAGE_THUNK_DATA* ) ( virtual_image.data() + descriptor_table_entry->FirstThunk );
 
-            std::string module_name = ( ( LPCSTR ) ( virtual_image.data() + descriptor_table_entry->Name ) );
-            if ( !strncmp( "api-ms", module_name.c_str(), 6 ) )
-                module_name = get_dll_name_from_api_set_map( module_name );
+			std::string module_name = ( ( LPCSTR ) ( virtual_image.data() + descriptor_table_entry->Name ) );
+			if ( !strncmp( "api-ms", module_name.c_str(), 6 ) )
+				module_name = get_dll_name_from_api_set_map( module_name );
 
-            const std::wstring wide_name = { module_name.begin(), module_name.end() };
+			const std::wstring wide_name = { module_name.begin(), module_name.end() };
 
 			const auto import_library = LoadLibraryExA( module_name.c_str(), NULL, DONT_RESOLVE_DLL_REFERENCES );
 			if ( !import_library )
 				return error( mfm::format( "\t%s not found\n", module_name ).c_str() );
 
-            if ( !get_module( wide_name ) )
-            {
+			if ( !get_module( wide_name ) )
+			{
 				printf( "\tloading % into process\n", module_name.c_str() );
-				
+
 				static auto kernel32 = GetModuleHandle( L"kernel32.dll" );
 				static auto func = ( HOOKPROC ) GetProcAddress( kernel32, "GetTickCount64" );
 
@@ -230,7 +250,7 @@ bool process<memory_interface>::map_image( const char* filepath )
 					return error( "\tsetwindowshookex failed\n" );
 
 				PostThreadMessage( tid, WM_NULL, NULL, NULL );
-            }
+			}
 
 			while ( lookup_table_entry->u1.AddressOfData )
 			{
@@ -269,10 +289,11 @@ bool process<memory_interface>::map_image( const char* filepath )
 		return error( "\tfailed to write image\n" );
 
 	// todo
+	// call entry point...
 
 	printf( "[+] %s injected\n", filepath );
 
-    return false;
+	return false;
 }
 
 template<typename memory_interface>
@@ -280,27 +301,27 @@ bool process<memory_interface>::dump_module_to_disk( const std::wstring& name )
 {
 	auto error = []( const char* msg ) -> bool { printf( msg ); return false; };
 
-    const auto narrow_name = std::string( name.begin(), name.end() );
-    
-    const auto mod = get_module( name );
-    if ( !mod )
-        return error( mfm::format( "[!] could not find %s\n", narrow_name ).c_str() );
+	const auto narrow_name = std::string( name.begin(), name.end() );
 
-    std::vector<std::byte> module_buffer( mod->size );
+	const auto mod = get_module( name );
+	if ( !mod )
+		return error( mfm::format( "[!] could not find %s\n", narrow_name ).c_str() );
 
-    constexpr size_t MAX_ATTEMPTS = 50;
+	std::vector<std::byte> module_buffer( mod->size );
 
-    size_t attempts = 0;
-    size_t NUM_READS = 1;
+	constexpr size_t MAX_ATTEMPTS = 50;
 
-    while ( attempts < MAX_ATTEMPTS && !read( mod->base, module_buffer.data(), mod->size / NUM_READS ) )
-    {
-        NUM_READS *= 2;
-        attempts++;
-    }
+	size_t attempts = 0;
+	size_t NUM_READS = 1;
 
-    if ( attempts == MAX_ATTEMPTS )
-        return error( "[!] reached max attempts to read module\n" );
+	while ( attempts < MAX_ATTEMPTS && !read( mod->base, module_buffer.data(), mod->size / NUM_READS ) )
+	{
+		NUM_READS *= 2;
+		attempts++;
+	}
+
+	if ( attempts == MAX_ATTEMPTS )
+		return error( "[!] reached max attempts to read module\n" );
 
 	for ( size_t i = 1; i < NUM_READS; i++ )
 	{
@@ -308,17 +329,17 @@ bool process<memory_interface>::dump_module_to_disk( const std::wstring& name )
 			module_buffer.data() + ( mod->size / NUM_READS * i ),
 			mod->size / NUM_READS );
 	}
-    
-    std::stringstream file_name;
-    file_name << narrow_name.c_str() << ".bin";
 
-    std::ofstream dump_file( file_name.str(), std::ios::binary);
-    if ( !dump_file )
-        return error( "[!] failed to open output stream" );
+	std::stringstream file_name;
+	file_name << narrow_name.c_str() << ".bin";
+
+	std::ofstream dump_file( file_name.str(), std::ios::binary );
+	if ( !dump_file )
+		return error( "[!] failed to open output stream" );
 
 	dump_file.write( ( const char* ) module_buffer.data(), mod->size );
 
-    dump_file.close();
+	dump_file.close();
 
-    return true;
+	return true;
 }

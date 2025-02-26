@@ -4,11 +4,11 @@ int main( int argc, char* argv[] )
 {
 	auto error = []( const char* msg ) -> int { printf( msg ); system( "pause" ); return 1; };
 
-	if ( argc != 2 )
-		return error( mfm::format( "[!] usage: %s <process_name>\n", argv[ 0 ] ).c_str() );
+	if ( argc != 3 )
+		return error( mfm::format( "[!] usage: %s <process_name> <dll_path>\n", argv[ 0 ] ).c_str() );
 
 	const std::wstring process_name = { argv[ 1 ], &argv[ 1 ][ strlen( argv[ 1 ] ) ] };
- 
+
 	process<memory_interface::windows_api> proc( util::get_proc_id( process_name.c_str() ) );
 	if ( !proc.valid() )
 		return error( "[!] failed to attach to process\n" );
@@ -34,8 +34,11 @@ int main( int argc, char* argv[] )
 
 	printf( "[+] pattern address: 0x%llx\n", pattern_address );
 
+	if ( proc.load_image( argv[ 2 ] ) )
+		printf( "[+] injected %s\n", argv[ 2 ] );
+
 	if ( proc.dump_module_to_disk( process_name ) )
-		printf( "[+] successfully dumped %ls\n", process_name.c_str() );
+		printf( "[+] dumped %ls\n", process_name.c_str() );
 
 	system( "pause" );
 }
