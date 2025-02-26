@@ -148,11 +148,12 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="src\example.cpp" />
+    <ClCompile Include="example\main.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\api_set.h" />
-    <ClInclude Include="src\memory_interface.h" />
+    <ClInclude Include="src\memory-interfaces\driver.h" />
+    <ClInclude Include="src\memory-interfaces\windows_api.h" />
     <ClInclude Include="src\mini_format.h" />
     <ClInclude Include="src\process.h" />
     <ClInclude Include="src\scope_guard.h" />
