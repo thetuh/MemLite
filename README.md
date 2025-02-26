@@ -3,16 +3,16 @@ A header-only, lightweight x86/x64 Windows process memory library.
 ## Usage:
 ```cpp
 // returns id of process with the name "notepad.exe".
-const auto pid = memlite::util::get_pid( L"notepad.exe" );
+const DWORD pid = memlite::util::get_pid( L"notepad.exe" );
 
 // instantiates a 'memlite::process' instance using the id.
 memlite::process process( pid );
 
-// allocates virtual memory.
-const auto address = process.alloc( 0x1000 );
+// allocates virtual memory of provided specifications.
+const void* address = process.alloc( 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE );
 
 // reads the corresponding virtual address.
-const auto buffer = process.read( address );
+const int buffer = process.read( address );
 
 // writes to the corresponding virtual address.
 process.write( address, 0xDEADBEEF );
