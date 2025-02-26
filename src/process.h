@@ -56,6 +56,8 @@ namespace memlite {
 			return write( address, &value, sizeof( T ) );
 		}
 
+		inline void* alloc( size_t size, DWORD allocation_type, DWORD protect ) { return m_interface.alloc( nullptr, size, allocation_type, protect ); }
+
 		module_t* get_module( const std::wstring& name );
 		bool load_image( const char* filepath );
 		void* find_pattern( const module_t* mod, const char* pattern );
