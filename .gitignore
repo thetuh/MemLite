@@ -1,0 +1,6 @@
+.vs/
+build/
+*.exe
+*.pdb
+*.ipch
+*.suo
