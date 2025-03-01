@@ -154,7 +154,6 @@
     <ClInclude Include="src\api_set.h" />
     <ClInclude Include="src\memory-interfaces\driver.h" />
     <ClInclude Include="src\memory-interfaces\windows_api.h" />
-    <ClInclude Include="src\mini_format.h" />
     <ClInclude Include="src\process.h" />
     <ClInclude Include="src\scope_guard.h" />
     <ClInclude Include="src\util.h" />

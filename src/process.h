@@ -8,7 +8,6 @@
 
 #include "util.h"
 #include "api_set.h"
-#include "mini_format.h"
 
 #include "memory-interfaces/windows_api.h"
 #include "memory-interfaces/driver.h"
@@ -39,6 +38,7 @@ namespace memlite {
 		inline memory_interface& get_memory_interface() { return m_interface; }
 
 		bool read( void* address, void* buffer, size_t size ) { return m_interface.read( address, buffer, size ); }
+		bool try_read( void* address, void* buffer, size_t size, size_t max_attempts = 50 );
 		bool write( void* address, void* buffer, size_t size ) { return m_interface.write( address, buffer, size ); }
 		void* alloc( void* address, size_t size, DWORD allocation_type, DWORD protect ) { return m_interface.alloc( address, size, allocation_type, protect ); }
 
@@ -78,26 +78,8 @@ namespace memlite {
 
 		std::vector<std::byte> module_buffer( mod->size );
 
-		constexpr size_t MAX_ATTEMPTS = 50;
-
-		size_t attempts = 0;
-		size_t NUM_READS = 1;
-
-		while ( attempts < MAX_ATTEMPTS && !read( mod->base, module_buffer.data(), mod->size / NUM_READS ) )
-		{
-			NUM_READS *= 2;
-			attempts++;
-		}
-
-		if ( attempts == MAX_ATTEMPTS )
-			return error( "[!] reached max attempts to read module\n" );
-
-		for ( size_t i = 1; i < NUM_READS; i++ )
-		{
-			read( PVOID( ( uintptr_t ) mod->base + mod->size / NUM_READS * i ),
-				module_buffer.data() + ( mod->size / NUM_READS * i ),
-				mod->size / NUM_READS );
-		}
+		if ( !try_read( mod->base, module_buffer.data(), mod->size ) )
+			return error( "[!] failed to read module" );
 
 		const auto addr = util::find_pattern( pattern, ( uintptr_t ) module_buffer.data(), mod->size );
 		if ( addr )
@@ -116,6 +98,31 @@ namespace memlite {
 
 		// this will fail if the module base is different for our process.
 		return GetProcAddress( ( HMODULE ) mod->base, function_name );
+	}
+
+	template<typename memory_interface>
+	inline bool process<memory_interface>::try_read( void* address, void* buffer, size_t size, size_t max_attempts )
+	{
+		size_t attempts = 0;
+		size_t num_reads = 1;
+
+		while ( attempts < max_attempts && !read( address, buffer, size / num_reads ) )
+		{
+			num_reads *= 2;
+			attempts++;
+		}
+
+		if ( attempts == max_attempts )
+			return false;
+
+		for ( size_t i = 1; i < num_reads; i++ )
+		{
+			read( PVOID( ( uintptr_t ) address + size / num_reads * i ),
+				PVOID( ( uintptr_t ) buffer + size / num_reads * i ),
+				size / num_reads );
+		}
+
+		return true;
 	}
 
 	template<typename memory_interface>
@@ -294,7 +301,7 @@ namespace memlite {
 
 				const auto import_library = LoadLibraryExA( module_name.c_str(), NULL, DONT_RESOLVE_DLL_REFERENCES );
 				if ( !import_library )
-					return error( mfm::format( "\t%s not found\n", module_name ).c_str() );
+					return error( std::format( "\t{} not found\n", module_name ).c_str() );
 
 				if ( !get_module( wide_name ) )
 				{
@@ -328,7 +335,7 @@ namespace memlite {
 
 						const auto import_address = GetProcAddress( import_library, ( ( IMAGE_IMPORT_BY_NAME* ) ( virtual_image.data() + lookup_table_entry->u1.AddressOfData ) )->Name );
 						if ( !import_address )
-							return error( mfm::format( "\timport %s not found\n", ( ( IMAGE_IMPORT_BY_NAME* ) ( virtual_image.data() + lookup_table_entry->u1.AddressOfData ) )->Name ).c_str() );
+							return error( std::format( "\timport {} not found\n", ( ( IMAGE_IMPORT_BY_NAME* ) ( virtual_image.data() + lookup_table_entry->u1.AddressOfData ) )->Name ).c_str() );
 
 						address_table_entry->u1.AddressOfData = ( uintptr_t ) import_address;
 					}
@@ -363,30 +370,12 @@ namespace memlite {
 
 		const auto mod = get_module( name );
 		if ( !mod )
-			return error( mfm::format( "[!] could not find %s\n", narrow_name ).c_str() );
+			return error( std::format( "[!] could not find {}\n", narrow_name ).c_str() );
 
 		std::vector<std::byte> module_buffer( mod->size );
 
-		constexpr size_t MAX_ATTEMPTS = 50;
-
-		size_t attempts = 0;
-		size_t NUM_READS = 1;
-
-		while ( attempts < MAX_ATTEMPTS && !read( mod->base, module_buffer.data(), mod->size / NUM_READS ) )
-		{
-			NUM_READS *= 2;
-			attempts++;
-		}
-
-		if ( attempts == MAX_ATTEMPTS )
-			return error( "[!] reached max attempts to read module\n" );
-
-		for ( size_t i = 1; i < NUM_READS; i++ )
-		{
-			read( PVOID( ( uintptr_t ) mod->base + mod->size / NUM_READS * i ),
-				module_buffer.data() + ( mod->size / NUM_READS * i ),
-				mod->size / NUM_READS );
-		}
+		if ( !try_read( mod->base, module_buffer.data(), mod->size ) )
+			return error( std::format( "[!] failed reading {}\n", narrow_name ).c_str() );
 
 		std::stringstream file_name;
 		file_name << narrow_name.c_str() << ".bin";

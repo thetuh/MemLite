@@ -5,7 +5,7 @@ int main( int argc, char* argv[] )
 	auto error = []( const char* msg ) -> int { printf( msg ); system( "pause" ); return 1; };
 
 	if ( argc != 3 )
-		return error( memlite::mfm::format( "[!] usage: %s <process_name> <dll_path>\n", argv[ 0 ] ).c_str() );
+		return error( std::format( "[!] usage: {} <process_name> <dll_path>\n", argv[ 0 ] ).c_str() );
 
 	const std::wstring process_name = { argv[ 1 ], &argv[ 1 ][ strlen( argv[ 1 ] ) ] };
 
