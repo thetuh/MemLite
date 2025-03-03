@@ -1,7 +1,9 @@
 # MemLite
 A header-only, lightweight x86/x64 Windows process memory library.
 ## Directive
-MemLite is designed to simplify process memory interaction for developers. It abstracts complex, multi-step Windows API operations into single, intuitive function calls.
+MemLite is intended to simplify process memory interaction for developers. It abstracts complex memory operations into single, intuitive function calls.
+
+MemLite is also designed to be extensible, allowing seamless integration of new features and [alternative memory I/O methods](https://github.com/thetuh/MemLite/blob/main/src/memory-interfaces/driver.h).
 ## Usage:
 ```cpp
 // returns id of process with the name "notepad.exe".
