@@ -14,6 +14,28 @@
 
 namespace memlite {
 
+	namespace ldr {
+
+		using fnDllMain = BOOL( WINAPI* )( HINSTANCE, DWORD, LPVOID );
+
+		struct ldr_data_t
+		{
+			HINSTANCE image_base;
+			fnDllMain dll_main;
+		};
+
+		inline BOOL WINAPI call_entry_point( ldr_data_t* data )
+		{
+			return data->dll_main( data->image_base, DLL_PROCESS_ATTACH, NULL );
+		}
+
+		inline DWORD call_entry_point_end()
+		{
+			return 0;
+		}
+
+	}
+
 	struct module_t
 	{
 		void* base;
@@ -161,14 +183,14 @@ namespace memlite {
 	{
 		auto error = []( const char* msg ) -> bool { printf( msg ); return false; };
 
+		printf( "[-] loading image\n" );
+
 		if ( !valid() )
-			return error( "[!] invalid process\n" );
+			return error( "\tinvalid process\n" );
 
 		const auto tid = util::get_window_tid( ( HANDLE ) m_pid );
 		if ( !tid )
-			return error( "[!] failed to get window tid\n" );
-
-		printf( "[-] loading image\n" );
+			return error( "\tfailed to get window tid\n" );
 
 		if ( !std::filesystem::exists( filepath ) )
 			return error( "\tfile not found\n" );
@@ -185,6 +207,8 @@ namespace memlite {
 
 		PostThreadMessage( tid, WM_NULL, NULL, NULL );
 
+		printf( "[+] injected %s\n", filepath );
+
 		return true;
 	}
 
@@ -195,14 +219,14 @@ namespace memlite {
 
 		// sanity check.
 
+		printf( "[-] mapping image\n" );
+
 		if ( !valid() )
-			return error( "[!] invalid process\n" );
+			return error( "\tinvalid process\n" );
 
 		const auto tid = util::get_window_tid( ( HANDLE ) m_pid );
 		if ( !tid )
-			return error( "[!] failed to get window tid\n" );
-
-		printf( "[-] reading file\n" );
+			return error( "\tfailed to get window tid\n" );
 
 		if ( !std::filesystem::exists( filepath ) )
 			return error( "\tfile not found\n" );
@@ -238,43 +262,42 @@ namespace memlite {
 				disk_image.data() + section_header[ i ].PointerToRawData, section_header[ i ].SizeOfRawData );
 		}
 
-		printf( "[-] allocating memory to process\n" );
+		printf( "\tallocating memory for image\n" );
 
 		auto base = alloc( ( LPVOID ) nt_headers->OptionalHeader.ImageBase, nt_headers->OptionalHeader.SizeOfImage, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE );
 		if ( !base )
 		{
 			base = alloc( nullptr, nt_headers->OptionalHeader.SizeOfImage, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE );
 			if ( !base )
-				return error( "\tfailed to allocate memory\n" );
+				return error( "\t\tfailed to allocate memory\n" );
 		}
 
-		printf( "[-] applying base relocations\n" );
+		printf( "\tapplying base relocations\n" );
 
 		const auto delta = ( uintptr_t ) base - nt_headers->OptionalHeader.ImageBase;
 
-		if ( nt_headers->OptionalHeader.DataDirectory[ IMAGE_DIRECTORY_ENTRY_BASERELOC ].Size && delta )
+		if ( delta && nt_headers->OptionalHeader.DataDirectory[ IMAGE_DIRECTORY_ENTRY_BASERELOC ].Size )
 		{
 			auto relocation_block = ( IMAGE_BASE_RELOCATION* ) ( virtual_image.data() + nt_headers->OptionalHeader.DataDirectory[ IMAGE_DIRECTORY_ENTRY_BASERELOC ].VirtualAddress );
+			const auto relocation_end = ( uintptr_t ) ( ( uintptr_t ) relocation_block + nt_headers->OptionalHeader.DataDirectory[ IMAGE_DIRECTORY_ENTRY_BASERELOC ].Size );
 
-			while ( relocation_block->VirtualAddress )
+			while ( ( uintptr_t ) relocation_block < relocation_end )
 			{
-				const size_t block_entries = ( relocation_block->SizeOfBlock - sizeof( IMAGE_BASE_RELOCATION ) ) / sizeof( WORD );
+				const auto block_entries = ( relocation_block->SizeOfBlock - sizeof( IMAGE_BASE_RELOCATION ) ) >> 1;
+
+				struct reloc_entry
+				{
+					std::uint16_t offset : 12;
+					std::uint16_t type : 4;
+				};
 
 				for ( size_t i = 0; i < block_entries; i++ )
 				{
-					const auto block_entry = ( ( WORD* ) ( relocation_block + 1 ) )[ i ];
+					const auto block_entry = ( ( reloc_entry* ) ( relocation_block + 1 ) )[ i ];
 
-					const uint8_t type = block_entry >> 12;
-					const uint16_t offset = block_entry & 0xFFF;
-
-					if ( type == IMAGE_REL_BASED_HIGHLOW )
+					if ( block_entry.type == IMAGE_REL_BASED_HIGHLOW || block_entry.type == IMAGE_REL_BASED_DIR64 )
 					{
-						uint32_t* absolute_address = ( uint32_t* ) ( virtual_image.data() + relocation_block->VirtualAddress + offset );
-						*absolute_address += delta;
-					}
-					else if ( type == IMAGE_REL_BASED_DIR64 )
-					{
-						uint64_t* absolute_address = ( uint64_t* ) ( virtual_image.data() + relocation_block->VirtualAddress + offset );
+						uintptr_t* absolute_address = ( uintptr_t* ) ( virtual_image.data() + relocation_block->VirtualAddress + block_entry.offset );
 						*absolute_address += delta;
 					}
 				}
@@ -283,7 +306,7 @@ namespace memlite {
 			}
 		}
 
-		printf( "[-] resolving imports\n" );
+		printf( "\tresolving imports\n" );
 
 		if ( nt_headers->OptionalHeader.DataDirectory[ IMAGE_DIRECTORY_ENTRY_IMPORT ].Size )
 		{
@@ -301,18 +324,18 @@ namespace memlite {
 
 				const auto import_library = LoadLibraryExA( module_name.c_str(), NULL, DONT_RESOLVE_DLL_REFERENCES );
 				if ( !import_library )
-					return error( std::format( "\t{} not found\n", module_name ).c_str() );
+					return error( std::format( "\t\t{} not found\n", module_name ).c_str() );
 
 				if ( !get_module( wide_name ) )
 				{
-					printf( "\tloading % into process\n", module_name.c_str() );
+					printf( "\t\tloading %s into process\n", module_name.c_str() );
 
 					static auto kernel32 = GetModuleHandle( L"kernel32.dll" );
 					static auto func = ( HOOKPROC ) GetProcAddress( kernel32, "GetTickCount64" );
 
 					const auto hook_handle = SetWindowsHookEx( WH_GETMESSAGE, func, import_library, tid );
 					if ( !hook_handle )
-						return error( "\tsetwindowshookex failed\n" );
+						return error( "\t\tsetwindowshookex failed\n" );
 
 					PostThreadMessage( tid, WM_NULL, NULL, NULL );
 				}
@@ -325,7 +348,7 @@ namespace memlite {
 
 						const auto import_address = GetProcAddress( import_library, ( LPCSTR ) ( lookup_table_entry->u1.AddressOfData & 0xFFFF ) );
 						if ( !import_address )
-							return error( "\tordinal not found\n" );
+							return error( "\t\tordinal not found\n" );
 
 						address_table_entry->u1.AddressOfData = ( uintptr_t ) import_address;
 					}
@@ -335,7 +358,7 @@ namespace memlite {
 
 						const auto import_address = GetProcAddress( import_library, ( ( IMAGE_IMPORT_BY_NAME* ) ( virtual_image.data() + lookup_table_entry->u1.AddressOfData ) )->Name );
 						if ( !import_address )
-							return error( std::format( "\timport {} not found\n", ( ( IMAGE_IMPORT_BY_NAME* ) ( virtual_image.data() + lookup_table_entry->u1.AddressOfData ) )->Name ).c_str() );
+							return error( std::format( "\t\timport {} not found\n", ( ( IMAGE_IMPORT_BY_NAME* ) ( virtual_image.data() + lookup_table_entry->u1.AddressOfData ) )->Name ).c_str() );
 
 						address_table_entry->u1.AddressOfData = ( uintptr_t ) import_address;
 					}
@@ -348,17 +371,49 @@ namespace memlite {
 			}
 		}
 
-		printf( "[-] writing image to process\n" );
+		printf( "\twriting image to process\n" );
 
 		if ( !write( base, virtual_image.data(), nt_headers->OptionalHeader.SizeOfImage ) )
-			return error( "\tfailed to write image\n" );
+			return error( "\t\tfailed to write image\n" );
 
-		// todo
-		// call entry point...
+		printf( "\tallocating memory for ldr data\n" );
 
-		printf( "[+] %s injected\n", filepath );
+		const auto ldr_base = alloc( 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE );
+		if ( !ldr_base )
+			return error( "\t\tfailed to allocate memory\n" );
 
-		return false;
+		printf( "\twriting ldr data\n" );
+
+		ldr::ldr_data_t data;
+		data.image_base = ( HINSTANCE ) base;
+		data.dll_main = ( ldr::fnDllMain ) ( ( uintptr_t ) base + nt_headers->OptionalHeader.AddressOfEntryPoint );
+
+		if ( !write( ldr_base, &data, sizeof( data ) ) )
+			return error( "\t\tfailed to write ldr data\n" );
+
+		if ( !write( ( void* ) ( ( uintptr_t ) ldr_base + sizeof( data ) ), &ldr::call_entry_point, ( uintptr_t ) &ldr::call_entry_point_end - ( uintptr_t ) &ldr::call_entry_point ) )
+			return error( "\t\tfailed to write entry point call" );
+
+		printf( "\tcalling entry point\n" );
+
+		if constexpr ( std::is_same<memory_interface, interfaces::windows_api>::value )
+		{
+			const auto proc_handle = m_interface.get_handle();
+			if ( !proc_handle )
+				return error( "\t\tinvalid process handle\n" );
+
+			const auto thread = CreateRemoteThread( proc_handle, NULL, NULL, ( LPTHREAD_START_ROUTINE ) ( ( uintptr_t ) ldr_base + sizeof( data ) ), ldr_base, NULL, NULL );
+			if ( !thread )
+				return error( "\t\tfailed to create remote thread\n" );
+
+			WaitForSingleObject( thread, INFINITE );
+
+			CloseHandle( thread );
+		}
+
+		printf( "[+] manually mapped %s\n", filepath );
+
+		return true;
 	}
 
 	template<typename memory_interface>

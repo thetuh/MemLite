@@ -34,10 +34,13 @@ int main( int argc, char* argv[] )
 
 	printf( "[+] pattern location: 0x%llx\n", pattern_address );
 
-	if ( proc.load_image( argv[ 2 ] ) )
-		printf( "[+] injected %s\n", argv[ 2 ] );
+	if ( !proc.load_image( argv[ 2 ] ) )
+		return error( "image loading failed\n" );
 
-	if ( proc.dump_module_to_disk( process_name ) )
+	if ( !proc.map_image( argv[ 2 ] ) )
+		return error( "manual mapping failed\n" );
+
+	if ( !proc.dump_module_to_disk( process_name ) )
 		printf( "[+] dumped %ls\n", process_name.c_str() );
 
 	system( "pause" );
